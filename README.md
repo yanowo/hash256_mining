@@ -49,7 +49,7 @@ CPU/OpenCL/CUDA choices:
 Pool mining does not require a miner private key:
 
 ```powershell
-.\hashminer.exe pool-mine --pool http://你的礦池IP:8080 --payout 0x你的收款地址 --worker rig1 --backend cuda
+.\hashminer.exe pool-mine --pool https://hash256.yanowo.xyz/ --payout 0x你的收款地址 --worker rig1 --backend cuda
 ```
 
 ## Commands
