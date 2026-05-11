@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build (!windows && !linux && !darwin) || ((linux || darwin) && !cgo)
 
 package opencl
 
@@ -15,5 +15,5 @@ type DeviceInfo struct {
 }
 
 func ListGPUDevices() ([]DeviceInfo, error) {
-	return nil, fmt.Errorf("OpenCL GPU backend currently supports Windows only")
+	return nil, fmt.Errorf("OpenCL GPU backend requires Windows, or Linux/macOS with CGO_ENABLED=1 and an OpenCL runtime")
 }

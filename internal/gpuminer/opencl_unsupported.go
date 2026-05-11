@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build (!windows && !linux && !darwin) || ((linux || darwin) && !cgo)
 
 package gpuminer
 
@@ -38,9 +38,9 @@ type DeviceInfo struct {
 }
 
 func ListDevices() ([]DeviceInfo, error) {
-	return nil, fmt.Errorf("GPU backend currently supports Windows OpenCL only")
+	return nil, fmt.Errorf("GPU backend requires Windows, or Linux/macOS with CGO_ENABLED=1 and an OpenCL runtime")
 }
 
 func Search(context.Context, Job, func(Progress)) (Result, error) {
-	return Result{}, fmt.Errorf("GPU backend currently supports Windows OpenCL only")
+	return Result{}, fmt.Errorf("GPU backend requires Windows, or Linux/macOS with CGO_ENABLED=1 and an OpenCL runtime")
 }

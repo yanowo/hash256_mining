@@ -12,8 +12,14 @@ go build -o .\hashminer.exe .\cmd\hashminer
 Linux/macOS:
 
 ```bash
+# CPU only
 go build -o ./hashminer ./cmd/hashminer
+
+# OpenCL/CUDA
+CGO_ENABLED=1 go build -o ./hashminer ./cmd/hashminer
 ```
+
+CPU mining is pure Go. OpenCL/CUDA mining on Linux/macOS requires `CGO_ENABLED=1`, a C compiler, and the matching runtime libraries installed. If library discovery fails, set `HASHMINER_OPENCL_LIB`, `HASHMINER_CUDA_DRIVER`, or `HASHMINER_NVRTC_LIB` to the full library/framework path.
 
 ## Environment
 
@@ -49,7 +55,7 @@ CPU/OpenCL/CUDA choices:
 Pool mining does not require a miner private key:
 
 ```powershell
-.\hashminer.exe pool-mine --pool https://hash256.yanowo.xyz/ --payout 0x你的收款地址 --worker rig1 --backend cuda
+.\hashminer.exe pool-mine --pool http://你的礦池IP:8080 --payout 0x你的收款地址 --worker rig1 --backend cuda
 ```
 
 ## Commands

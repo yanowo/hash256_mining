@@ -1579,7 +1579,10 @@ func usage() {
   PRIVATE_KEY   礦工私鑰；帳戶需要有 ETH 支付 gas
   HASHMINER_BACKEND   cpu、gpu/opencl、cuda、hybrid 或 cuda+cpu
   HASHMINER_CUDA_ARCH   NVRTC 編譯目標；不填時依裝置自動推導
-  HASHMINER_NVRTC_DLL   指定 nvrtc64_*.dll 路徑；通常不需要
+  HASHMINER_CUDA_DRIVER   Linux/macOS 指定 libcuda 路徑；通常不需要
+  HASHMINER_NVRTC_LIB   Linux/macOS 指定 libnvrtc 路徑；通常不需要
+  HASHMINER_NVRTC_DLL   Windows 指定 nvrtc64_*.dll 路徑；通常不需要
+  HASHMINER_OPENCL_LIB   Linux/macOS 指定 OpenCL library/framework 路徑；通常不需要
   HASH_POOL_URL   pool-mine 預設礦池 URL
   HASHMINER_RECONNECT_INTERVAL   pool-mine 斷線重連間隔，預設 30s
   POOL_PAYOUT   pool-mine 收款地址；POOL_MINER 仍可作為相容別名

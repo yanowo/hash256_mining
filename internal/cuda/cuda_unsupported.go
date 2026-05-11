@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build (!windows && !linux && !darwin) || ((linux || darwin) && !cgo)
 
 package cuda
 
@@ -20,5 +20,5 @@ type DeviceInfo struct {
 }
 
 func ListDevices() ([]DeviceInfo, error) {
-	return nil, fmt.Errorf("CUDA backend currently supports Windows only")
+	return nil, fmt.Errorf("CUDA backend requires Windows, or Linux/macOS with CGO_ENABLED=1 and CUDA driver/toolkit libraries")
 }
