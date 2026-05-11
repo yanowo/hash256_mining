@@ -502,6 +502,7 @@ func runPoolMine(args []string) error {
 	cudaIterations := fs.Uint("cuda-iterations", defaultCUDAIterations, "CUDA hashes per thread")
 	startRaw := fs.String("start", "", "start nonce as decimal or 0x hex; random uint64 if empty")
 	reportEvery := fs.Duration("report", 5*time.Second, "progress report interval")
+	reconnectInterval := fs.Duration("reconnect-interval", envDuration("HASHMINER_RECONNECT_INTERVAL", 30*time.Second), "pool reconnect retry interval")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -522,14 +523,21 @@ func runPoolMine(args []string) error {
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	lastJobID := ""
+	lastHashrate := 0.0
+	if *reconnectInterval <= 0 {
+		*reconnectInterval = 30 * time.Second
+	}
 
 	for {
-		job, err := fetchPoolJob(ctx, httpClient, *poolURL, minerName, *worker)
+		job, err := fetchPoolJob(ctx, httpClient, *poolURL, minerName, *worker, *backend, lastHashrate)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			if !waitReconnect(ctx, *reconnectInterval, fmt.Sprintf("pool job unavailable: %v", err)) {
+				return nil
+			}
+			continue
 		}
 		shareTarget, err := parseHexUint256(job.ShareTarget)
 		if err != nil {
@@ -547,9 +555,15 @@ func runPoolMine(args []string) error {
 			fmt.Printf("worker:    %s\n", *worker)
 			fmt.Printf("job:       %s\n", job.JobID)
 			fmt.Printf("pool addr: %s\n", job.PoolAddress)
+			if job.BlockNumber > 0 {
+				fmt.Printf("block:     %d\n", job.BlockNumber)
+			}
 			fmt.Printf("epoch:     %s blocks_left=%s\n", job.Epoch, job.EpochBlocksLeft)
 			fmt.Printf("network:   ~%s hashes/solution\n", job.NetworkWork)
 			fmt.Printf("share:     ~%s hashes/share\n", job.ShareWorkHuman)
+			if job.DeviceClass != "" {
+				fmt.Printf("vardiff:   %s\n", job.DeviceClass)
+			}
 			fmt.Printf("auth:      payout address only; no miner private key required\n")
 			fmt.Printf("backend:   %s\n", *backend)
 			if backendUsesOpenCL(*backend) {
@@ -582,6 +596,7 @@ func runPoolMine(args []string) error {
 			CUDAIterations: uint32(*cudaIterations),
 			ReportInterval: *reportEvery,
 		}, func(p miner.Progress) {
+			lastHashrate = p.Hashrate
 			fmt.Printf("share-rate:%s/s hashes=%d elapsed=%s eta=%s job=%s\n",
 				formatRate(p.Hashrate),
 				p.Hashes,
@@ -603,14 +618,25 @@ func runPoolMine(args []string) error {
 			return err
 		}
 
-		resp, err := submitPoolShare(ctx, httpClient, *poolURL, poolShareRequest{
-			Miner:  minerName,
-			Worker: *worker,
-			JobID:  job.JobID,
-			Nonce:  strconv.FormatUint(result.Nonce, 10),
-		})
-		if err != nil {
-			return err
+		var resp poolShareResponse
+		for {
+			resp, err = submitPoolShare(ctx, httpClient, *poolURL, poolShareRequest{
+				Miner:    minerName,
+				Worker:   *worker,
+				JobID:    job.JobID,
+				Nonce:    strconv.FormatUint(result.Nonce, 10),
+				Backend:  *backend,
+				Hashrate: lastHashrate,
+			})
+			if err == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			if !waitReconnect(ctx, *reconnectInterval, fmt.Sprintf("pool share submit failed: %v", err)) {
+				return nil
+			}
 		}
 		if resp.Accepted {
 			fmt.Printf("accepted:  nonce=%s hash=%s score=%s", resp.Nonce, resp.Hash, formatHashCount(new(big.Float).SetInt(parseScoreWork(resp.Score))))
@@ -1103,25 +1129,31 @@ func printCUDADevice(index int) {
 type poolJobResponse struct {
 	PoolAddress        string `json:"pool_address"`
 	Challenge          string `json:"challenge"`
+	BlockNumber        uint64 `json:"block_number"`
 	Epoch              string `json:"epoch"`
 	EpochBlocksLeft    string `json:"epoch_blocks_left"`
 	RewardWei          string `json:"reward_wei"`
 	RewardHASH         string `json:"reward_hash"`
+	NetworkDifficulty  string `json:"network_difficulty"`
 	NetworkTarget      string `json:"network_target"`
 	NetworkWork        string `json:"network_work"`
+	ShareDifficulty    string `json:"share_difficulty"`
 	ShareTarget        string `json:"share_target"`
 	ShareWork          string `json:"share_work"`
 	ShareWorkHuman     string `json:"share_work_human"`
+	DeviceClass        string `json:"device_class,omitempty"`
 	JobID              string `json:"job_id"`
 	RefreshAfterSecs   int64  `json:"refresh_after_secs"`
 	ServerTimeUnixSecs int64  `json:"server_time_unix_secs"`
 }
 
 type poolShareRequest struct {
-	Miner  string `json:"miner"`
-	Worker string `json:"worker"`
-	JobID  string `json:"job_id"`
-	Nonce  string `json:"nonce"`
+	Miner    string  `json:"miner"`
+	Worker   string  `json:"worker"`
+	JobID    string  `json:"job_id"`
+	Nonce    string  `json:"nonce"`
+	Backend  string  `json:"backend,omitempty"`
+	Hashrate float64 `json:"hashrate,omitempty"`
 }
 
 type poolShareResponse struct {
@@ -1138,7 +1170,7 @@ type poolShareResponse struct {
 	JobID          string `json:"job_id,omitempty"`
 }
 
-func fetchPoolJob(ctx context.Context, httpClient *http.Client, baseURL string, minerName string, worker string) (poolJobResponse, error) {
+func fetchPoolJob(ctx context.Context, httpClient *http.Client, baseURL string, minerName string, worker string, backend string, hashrate float64) (poolJobResponse, error) {
 	endpoint, err := url.Parse(poolEndpoint(baseURL, "/job"))
 	if err != nil {
 		return poolJobResponse{}, err
@@ -1146,6 +1178,12 @@ func fetchPoolJob(ctx context.Context, httpClient *http.Client, baseURL string, 
 	q := endpoint.Query()
 	q.Set("miner", minerName)
 	q.Set("worker", worker)
+	if strings.TrimSpace(backend) != "" {
+		q.Set("backend", backend)
+	}
+	if hashrate > 0 && !math.IsInf(hashrate, 0) && !math.IsNaN(hashrate) {
+		q.Set("hashrate", strconv.FormatFloat(hashrate, 'f', 2, 64))
+	}
 	endpoint.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -1207,6 +1245,21 @@ func submitPoolShare(ctx context.Context, httpClient *http.Client, baseURL strin
 		return out, nil
 	}
 	return out, nil
+}
+
+func waitReconnect(ctx context.Context, interval time.Duration, reason string) bool {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	fmt.Printf("reconnect: %s; retrying in %s\n", reason, interval.Round(time.Second))
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func poolEndpoint(baseURL string, path string) string {
@@ -1528,6 +1581,7 @@ func usage() {
   HASHMINER_CUDA_ARCH   NVRTC 編譯目標；不填時依裝置自動推導
   HASHMINER_NVRTC_DLL   指定 nvrtc64_*.dll 路徑；通常不需要
   HASH_POOL_URL   pool-mine 預設礦池 URL
+  HASHMINER_RECONNECT_INTERVAL   pool-mine 斷線重連間隔，預設 30s
   POOL_PAYOUT   pool-mine 收款地址；POOL_MINER 仍可作為相容別名
 `)
 }
